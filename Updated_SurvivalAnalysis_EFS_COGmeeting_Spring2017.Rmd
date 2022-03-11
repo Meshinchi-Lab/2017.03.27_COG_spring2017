@@ -1,0 +1,423 @@
+---
+title: "EFS Survival Analysis \n COG meeting Spring 2017 "
+author: "Jenny Smith"
+date: "March 29, 2017"
+output: pdf_document
+---
+
+Purpose: To create EFS curves to identify fusions or mutations which are associated with patient outcome and provide evidence for re-stratification of risk classification. 
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center')
+knitr::opts_knit$set(root.dir = 'H:/COG_Meetings_Analysis/2017.03.27_COG_spring2017/')
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(survival)
+library(RColorBrewer)
+library(colorspace)
+library(stringr)
+library(Biobase)
+library(dplyr)
+library(magrittr)
+library(tables)
+getwd()
+```
+
+
+```{r}
+source("H:/scripts/Survival_Analysis/Survplot_Functions.r")
+```
+
+
+#Read in the clinical data with the new classification strategy
+```{r comment="", tidy=TRUE, size="tiny"}
+# newClassification <- read.csv("New_stratification_outcomes_updated)_(003).csv")
+
+newClassification <- read.csv("New_stratification_outcomes_updated_2017.03.28.csv")
+
+head(newClassification[,c(1,9:12)])
+```
+
+```{r}
+dim(newClassification)
+```
+
+```{r}
+levels(newClassification$First.Event)
+```
+
+```{r}
+newClassification$First.Event <- ifelse(newClassification$First.Event == "Censored", 0, 1)
+```
+
+```{r}
+head(newClassification[,c(1,9:12)])
+```
+
+
+#Define Functions for subsetting and KM curves
+
+
+##Subsetting for each fusion or mutation 
+```{r}
+NewClassSubsets <- function(df, type, string){
+  if (type == "fusion"){
+    clinDataSubset <- subset(df, grepl(string, newClassification$Reason))
+  }
+  
+  if (type == "mutation"){
+    clinDataSubset <- subset(df, grepl(string, newClassification$Gene.Mutation.Group))
+  }
+  return(clinDataSubset)
+}
+```
+
+
+##Singleline KM survival estimates
+```{r}
+survivalAnalysis <- function(df){
+    require(survival)
+  
+    #Event Free survival analysis
+    efs <- survfit(Surv(time = (df$Event.Free.Survival.Time.in.Days/365), event = df$First.Event) ~ 1)
+    
+    return(efs)
+}
+```
+
+
+##Customize the output of SurvivalPlot() function. 
+SurvivalPlot is a function that is my generic version in Survplot_Functions.r
+```{r}
+efsCustomPlot <- function(fit, color){
+    
+    #label with number of patients
+    if (length(fit$n) == 1){
+      Num <- paste("n =", fit$n, sep = " ")
+    }else{
+      obs <- fit$n[1] + fit$n[2]
+      Num <- paste("n =", obs, sep = " ")
+    }
+    
+    #X axis position for Num
+    pos <- (max(fit$time)*0.75)
+
+    #customized plot 
+    if (length(color > 1)){
+      efs_plot <- SurvivalPlot(fit, "Mutation Status", "Years",color)
+    }else{
+      efs_plot <- SurvivalPlot(fit, "NA", "Years",color)
+    }
+
+    efs_plot <- efs_plot + annotate(geom="text", x=pos, y=1.0, label= Num, size=6)
+    
+    #return the ggplot object
+    return(efs_plot)
+}
+```
+
+
+Note: efs_plot + geom_label(aes(x=7, y=1.0, label=Num), size=5) would not recognize the Num variable and would cause error "object Num not found"
+
+Solution: Create a second dataframe for geom_label with x,y coordinates and labels. 
+
+http://stackoverflow.com/questions/30269619/r-ggplot-geom-txt-label-not-recognize-a-variable-in-function-call
+
+
+#Subset the clinical Data for the family of fusions
+
+###Fusions of interest per email communication
+email on march 26, 2017 @ 11:00pm
+```{r}
+fusionNames <- c("ETS", "NUP98-KDM5A", "NUP98-NSD1", "RAM", "CBFA2T3-GLIS2", "NUP98")
+MutationNames <- c("cohesin", "Spliceosome", "myosin")
+```
+
+
+###Loop through the fusions of interest and subset the clincal data. 
+```{r}
+fusionDataframes <- list()
+for (fusion in fusionNames){
+  fusionClinData <- NewClassSubsets(newClassification, "fusion", fusion) #subset the clinical data
+  fusion <- gsub("-", "_", fusion) #change dash to underscore.
+  fusionDataframes[[fusion]] <- fusionClinData #add dataframe to the list. 
+}
+
+# fusionDataframes
+```
+
+```{r}
+#names of the data frames
+summary(fusionDataframes)
+```
+
+```{r}
+#subset nup98 fusions
+NUP98_allOthers <- fusionDataframes[["NUP98"]][which( ! grepl("NUP98-KDM5A", fusionDataframes[["NUP98"]]$Reason) & ! grepl("NUP98-NSD1", fusionDataframes[["NUP98"]]$Reason )), ]
+```
+
+```{r}
+#add to the list of dataframes
+fusionDataframes[["NUP98_allOthers"]] <- NUP98_allOthers
+```
+
+```{r}
+#Number of patients in each dataframe. 
+sapply(fusionDataframes, nrow)
+```
+
+###Loop through the mutations of interest
+```{r}
+mutationsDataFrames <- list()
+for (mut in MutationNames){
+  mutationClinData <- NewClassSubsets(newClassification, "mutation", mut)
+  mutationsDataFrames[[mut]] <- mutationClinData
+}
+```
+
+```{r}
+summary(mutationsDataFrames)
+```
+
+```{r}
+sapply(mutationsDataFrames, nrow)
+```
+
+
+
+
+#Kaplan-Meier Curves of EFS (Event Free Survival)
+
+
+##Results of Survival Analysis 
+```{r}
+#survival analysis (SA)
+fusions_SA <- lapply(fusionDataframes, survivalAnalysis)
+
+fusions_SA
+```
+
+```{r}
+mutations_SA <- lapply(mutationsDataFrames, survivalAnalysis)
+
+mutations_SA
+```
+
+
+##Plot the Survival Curves 
+
+#### Event Free Survival 
+```{r}
+colorsFus <- c("dodgerblue4", "darkturquoise", "blueviolet", "firebrick", "deeppink4", "lightsteelblue4", "darkgreen")
+colorsMut <- c("royalblue1","goldenrod", "springgreen3")
+```
+
+```{r message=FALSE, warning=FALSE}
+efs_plots <- mapply(efsCustomPlot, fusions_SA, colorsFus, SIMPLIFY = FALSE)
+```
+
+```{r}
+summary(efs_plots)
+```
+
+#### Loop to add the main titles
+```{r}
+for (fusion in names(efs_plots)){
+  if (fusion == "RAM" ){
+    title <- paste(c("Event Free Survival in \n Patients with", fusion, "Immunophenotype" ), collapse = " ")
+  }else{
+    title <- paste(c("Event Free Survival in \n Patients with", gsub("_", "-", fusion), " Fusions" ), collapse = " ")
+  }
+  print(title)
+  efs_plots[[fusion]]$labels$title <- title
+}
+```
+
+```{r}
+for (i in 1:length(efs_plots)){
+  fileName <- paste(names(efs_plots)[i], "_EFS_2017.03.30.pdf", sep = "")
+  # pdf(file = fileName, height = 5, width = 6)
+  print(efs_plots[[i]])
+  # dev.off()
+}
+```
+
+
+#Mutation EFS Analysis 
+```{r}
+names(mutationsDataFrames)
+```
+
+###Survival Analysis
+```{r}
+mutation_SA <- lapply(mutationsDataFrames, survivalAnalysis)
+mutations_SA
+```
+
+###KM Curves
+```{r}
+efs_Mutplots <- mapply(efsCustomPlot, mutation_SA, colorsMut, SIMPLIFY = FALSE)
+```
+
+```{r}
+summary(efs_Mutplots)
+```
+
+```{r}
+for (mut in names(efs_Mutplots)){
+  mutName <- paste0(toupper(substr(mut, 1,1)), substr(mut, 2,nchar(mut))) 
+  title <- paste(c("Event Free Survival in \n Patients with", mutName, "Mutations" ), collapse = " ")
+  print(title)
+  efs_Mutplots[[mut]]$labels$title <- title
+}
+```
+
+```{r}
+for (i in 1:length(efs_Mutplots)){
+  fileName <- paste(names(efs_Mutplots)[i], "_EFS_2017.03.30.pdf", sep = "")
+#   pdf(file = fileName, height = 5, width = 6)
+  print(efs_Mutplots[[i]])
+#   dev.off()
+}
+```
+
+
+#Two Group Comparisons for Mutations
+
+```{r}
+mutationDiff <- function(df1, df2, ID){
+  #df1 - dataframe withonly the patients who have the mutation present
+  #df2 - the larger dataframe to be subset to those without the mutation
+  #ID is the column name matching patients IDs
+  group1 <- df1
+  group2 <- df2[ ! df2[,ID] %in% group1[,ID], ]
+  mutation_status <- c(rep("present",nrow(group1)), rep("absent", nrow(group2)))
+
+  comp_df <- rbind(group1,group2)
+  comp_df <- cbind(mutation_status, comp_df)
+  
+  return(comp_df)
+}
+```
+
+
+
+##Cohesins, myosins, and spliceosomes
+
+### Create the dataframes with a column for pres/abs status of mutation. 
+```{r}
+twoGroupComparisons <- lapply(mutationsDataFrames, mutationDiff, df2=newClassification, ID="TARGET.USI")
+
+```
+
+### Check that this is the same as seen in single line EFS curves
+```{r}
+sapply(twoGroupComparisons, function(x) length(which(x$mutation_status == "present")))
+```
+
+### Suvival Analysis
+```{r}
+comparisons_SA <- lapply(twoGroupComparisons, SurvObjects, group = "mutation_status", degFree = 1, type = "EFS")
+
+comparisons_SA
+```
+
+
+### KM Plots 
+```{r}
+fits <- lapply(comparisons_SA, function(l) l[[1]]) #selects only the first items in the list, which is the fit
+colors<- list(cohesin=c("dodgerblue4","royalblue1"), spliceosome=c("dodgerblue4","darkturquoise"), myosin=c("dodgerblue4", "springgreen3"))
+```
+
+
+```{r}
+comparisons_Plots <- mapply(efsCustomPlot, fits, colors, SIMPLIFY = FALSE)
+```
+
+```{r}
+for (plot in names(comparisons_Plots)){
+  mutName <- paste0(toupper(substr(plot, 1,1)), substr(plot, 2,nchar(plot))) 
+  title <- paste(c("Event Free Survival in \n Patients with", mutName, " Fusions" ), collapse = " ")
+  print(title)
+  comparisons_Plots[[plot]]$labels$title <- title
+}
+```
+
+
+```{r}
+for (i in 1:length(comparisons_Plots)){
+  fileName <- paste(names(comparisons_Plots)[i], "_EFS_2017.03.30.pdf", sep = "")
+  # pdf(file = fileName, height = 5, width = 6)
+  print(comparisons_Plots[[i]])
+  # dev.off()
+}
+```
+
+
+#cKit Mutations efs
+
+```{r}
+
+group1 <- newClassification[which(grepl("RUNX1-RUNX1T1 \\+ KIT", newClassification$Reason) | grepl("CBFB-MYH11 \\+ KIT", newClassification$Reason)), ]
+
+CBF_KIT <- rep("CBF and cKIT", nrow(group1))
+
+group1 <- cbind(CBF_KIT, group1)
+```
+
+```{r}
+group2 <- newClassification[which(grepl("RUNX1-RUNX1T1", newClassification$Reason) | grepl("CBFB-MYH11", newClassification$Reason)), ]
+
+group2 <- group2[ ! group2$TARGET.USI %in% group1$TARGET.USI, ]
+
+CBF_KIT <- rep("CBF Alone", nrow(group2))
+
+group2 <- cbind(CBF_KIT, group2)
+```
+
+```{r}
+dim(group1)
+dim(group2)
+```
+
+
+```{r}
+KIT_df <- rbind(group1,group2)
+
+head(KIT_df[,c(1,9:12)])
+```
+
+### Survival analysis
+```{r message=FALSE, warning=FALSE}
+KIT_SA <- SurvObjects(KIT_df, "CBF_KIT", 1, "EFS")
+
+KIT_SA
+```
+
+
+### KM plots
+
+```{r message=FALSE, warning=FALSE}
+# KIT <- SurvivalPlot(KIT_SA[[1]], "Mutation Status", "Year", c("dodgerblue4","darkturquoise"))
+KIT <- efsCustomPlot(KIT_SA[[1]],  c("dodgerblue4","darkturquoise"))
+```
+
+```{r}
+KIT$labels$title <- "Event Free Survival in \n Patients with CBF and cKIT Mutations"
+
+KIT
+```
+
+
+```{r}
+# pdf(file = "CBF_KIT_2017.03.31.pdf", height = 5, width = 8)
+# KIT
+# dev.off()
+```
+
+
+
+
